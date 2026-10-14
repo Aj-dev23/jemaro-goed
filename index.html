@@ -1,0 +1,829 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport"
+ content="width=device-width, initial-scale=1.0">
+<title>Horror Escape - Haunted Asylum</title>
+
+<style>
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  min-height: 100vh;
+  background: #050506;
+  color: #eee;
+  font-family: Arial, sans-serif;
+  display: flex;
+  justify-content: center;
+  align-items: center;
+}
+
+.game {
+  width: min(950px, 100%);
+  padding: 12px;
+  text-align: center;
+}
+
+h1 {
+  color: #e13b48;
+  letter-spacing: 5px;
+  text-shadow: 0 0 20px #a00018;
+  margin: 12px 0;
+}
+
+.subtitle {
+  color: #85858c;
+  letter-spacing: 3px;
+  font-size: 12px;
+  margin-bottom: 15px;
+}
+
+.hud {
+  display: flex;
+  justify-content: space-around;
+  flex-wrap: wrap;
+  gap: 12px;
+  background: #15151a;
+  padding: 12px;
+  border: 1px solid #34343b;
+  border-radius: 10px 10px 0 0;
+}
+
+.hud span {
+  font-size: 13px;
+}
+
+.hud strong {
+  color: #e85a66;
+}
+
+canvas {
+  display: block;
+  width: 100%;
+  height: auto;
+  background: #08080b;
+  border: 2px solid #34343b;
+  touch-action: none;
+}
+
+.bottom {
+  background: #15151a;
+  padding: 12px;
+  border-radius: 0 0 10px 10px;
+}
+
+button {
+  padding: 12px 18px;
+  margin: 4px;
+  background: #9d2735;
+  color: white;
+  border: 1px solid #d24958;
+  border-radius: 7px;
+  font-weight: bold;
+  cursor: pointer;
+  touch-action: none;
+}
+
+button:hover {
+  background: #d13c4c;
+}
+
+.instructions {
+  font-size: 12px;
+  color: #9999a5;
+  margin: 10px;
+}
+
+.mobile {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-top: 10px;
+}
+
+.dpad {
+  display: grid;
+  grid-template-columns: repeat(3, 45px);
+  gap: 3px;
+}
+
+.dpad button {
+  padding: 10px;
+  margin: 0;
+}
+
+.empty {
+  visibility: hidden;
+}
+
+#sprint {
+  background: #354b68;
+  border-color: #5e86ad;
+}
+</style>
+</head>
+
+<body>
+
+<div class="game">
+
+  <h1>HORROR ESCAPE</h1>
+  <div class="subtitle">THE HAUNTED ASYLUM</div>
+
+  <div class="hud">
+    <span>HEALTH: <strong id="health">100</strong></span>
+    <span>KEYS: <strong id="keys">0 / 3</strong></span>
+    <span>STAMINA: <strong id="stamina">100</strong></span>
+    <span>STATUS: <strong id="status">WAITING</strong></span>
+  </div>
+
+  <canvas id="canvas" width="900" height="550"></canvas>
+
+  <div class="bottom">
+    <button onclick="startGame()">START / RESTART</button>
+    <button onclick="togglePause()">PAUSE</button>
+
+    <div class="instructions">
+      WASD / ARROWS = Move |
+      SHIFT = Sprint |
+      F = Flashlight |
+      P = Pause
+    </div>
+
+    <div class="mobile">
+      <div class="dpad">
+        <span class="empty"></span>
+        <button id="up">▲</button>
+        <span class="empty"></span>
+
+        <button id="left">◀</button>
+        <span></span>
+        <button id="right">▶</button>
+
+        <span class="empty"></span>
+        <button id="down">▼</button>
+        <span class="empty"></span>
+      </div>
+
+      <div>
+        <button id="sprint">RUN</button>
+        <button id="flash">LIGHT</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+const canvas = document.getElementById("canvas");
+const ctx = canvas.getContext("2d");
+
+const W = canvas.width;
+const H = canvas.height;
+const TILE = 50;
+
+// # = wall, . = floor
+const map = [
+"##################",
+"#....#...........#",
+"#....#..####.....#",
+"#...............##",
+"#....###.........#",
+"#........#.......#",
+"###......#.......#",
+"#........#.......#",
+"#...###..........#",
+"#...........#....#",
+"##################"
+];
+
+let keys = {};
+let player;
+let monster;
+let items = [];
+let exit;
+
+let collected = 0;
+let health = 100;
+let stamina = 100;
+
+let running = false;
+let paused = false;
+let won = false;
+let lost = false;
+let flashlight = true;
+let frame = 0;
+let attackCooldown = 0;
+let message = "";
+let messageTimer = 0;
+
+let audioCtx = null;
+
+function sound(freq, duration, type = "sine") {
+  try {
+    if (!audioCtx) {
+      audioCtx = new (
+        window.AudioContext ||
+        window.webkitAudioContext
+      )();
+    }
+
+    const osc = audioCtx.createOscillator();
+    const gain = audioCtx.createGain();
+
+    osc.type = type;
+    osc.frequency.value = freq;
+
+    gain.gain.setValueAtTime(
+      0.045, audioCtx.currentTime
+    );
+
+    gain.gain.exponentialRampToValueAtTime(
+      0.001,
+      audioCtx.currentTime + duration
+    );
+
+    osc.connect(gain);
+    gain.connect(audioCtx.destination);
+
+    osc.start();
+    osc.stop(audioCtx.currentTime + duration);
+  } catch(e) {}
+}
+
+function startGame() {
+  player = {
+    x: 125,
+    y: 125,
+    r: 14,
+    speed: 2.4,
+    direction: 0
+  };
+
+  monster = {
+    x: 725,
+    y: 425,
+    r: 17,
+    speed: 1.25,
+    direction: 0
+  };
+
+  items = [
+    {x: 375, y: 125, taken: false},
+    {x: 175, y: 425, taken: false},
+    {x: 775, y: 225, taken: false}
+  ];
+
+  exit = {
+    x: 825,
+    y: 75,
+    w: 30,
+    h: 35
+  };
+
+  collected = 0;
+  health = 100;
+  stamina = 100;
+  frame = 0;
+  attackCooldown = 0;
+
+  flashlight = true;
+  running = true;
+  paused = false;
+  won = false;
+  lost = false;
+  keys = {};
+
+  showMessage("FIND 3 KEYS AND ESCAPE", 180);
+  updateHUD();
+}
+
+function togglePause() {
+  if (running) paused = !paused;
+}
+
+function showMessage(text, duration = 100) {
+  message = text;
+  messageTimer = duration;
+}
+
+function updateHUD() {
+  document.getElementById("health").textContent =
+    Math.ceil(health);
+
+  document.getElementById("keys").textContent =
+    collected + " / 3";
+
+  document.getElementById("stamina").textContent =
+    Math.ceil(stamina);
+
+  document.getElementById("status").textContent =
+    won ? "ESCAPED" :
+    lost ? "DEAD" :
+    paused ? "PAUSED" :
+    running ? "ALIVE" : "WAITING";
+}
+
+function wallAt(x, y) {
+  const col = Math.floor(x / TILE);
+  const row = Math.floor(y / TILE);
+
+  if (
+    row < 0 || row >= map.length ||
+    col < 0 || col >= map[0].length
+  ) return true;
+
+  return map[row][col] === "#";
+}
+
+function canMove(x, y, r) {
+  return !(
+    wallAt(x-r, y-r) ||
+    wallAt(x+r, y-r) ||
+    wallAt(x-r, y+r) ||
+    wallAt(x+r, y+r)
+  );
+}
+
+function distance(a, b) {
+  return Math.hypot(a.x-b.x, a.y-b.y);
+}
+
+function moveEntity(entity, dx, dy) {
+  if (canMove(entity.x+dx, entity.y, entity.r)) {
+    entity.x += dx;
+  }
+
+  if (canMove(entity.x, entity.y+dy, entity.r)) {
+    entity.y += dy;
+  }
+}
+
+function update() {
+  frame++;
+
+  if (messageTimer > 0) messageTimer--;
+
+  if (!running || paused) return;
+
+  let dx = 0;
+  let dy = 0;
+
+  if (keys["w"] || keys["ArrowUp"]) dy--;
+  if (keys["s"] || keys["ArrowDown"]) dy++;
+  if (keys["a"] || keys["ArrowLeft"]) dx--;
+  if (keys["d"] || keys["ArrowRight"]) dx++;
+
+  const moving = dx !== 0 || dy !== 0;
+
+  if (moving) {
+    const length = Math.hypot(dx, dy);
+    dx /= length;
+    dy /= length;
+
+    player.direction = Math.atan2(dy, dx);
+  }
+
+  const sprinting =
+    (keys["Shift"] || keys["sprint"]) &&
+    stamina > 0 &&
+    moving;
+
+  const speed = sprinting ? 4.2 : player.speed;
+
+  if (sprinting) {
+    stamina = Math.max(0, stamina - 0.55);
+  } else {
+    stamina = Math.min(100, stamina + 0.22);
+  }
+
+  moveEntity(player, dx*speed, dy*speed);
+
+  // Collect keys
+  for (const item of items) {
+    if (!item.taken && distance(player, item) < 25) {
+      item.taken = true;
+      collected++;
+      sound(800, 0.2);
+      showMessage("KEY FOUND!", 100);
+    }
+  }
+
+  // Monster follows the player using a grid path
+  const monsterDistance = distance(player, monster);
+
+  if (monsterDistance < 370) {
+    const path = findPath(monster, player);
+
+    if (path.length > 0) {
+      const next = path[0];
+      const vx = next.x - monster.x;
+      const vy = next.y - monster.y;
+      const len = Math.hypot(vx, vy);
+
+      if (len > 1) {
+        moveEntity(
+          monster,
+          vx / len * monster.speed,
+          vy / len * monster.speed
+        );
+      }
+    }
+  } else {
+    // Small idle movement
+    monster.direction += 0.01;
+  }
+
+  if (attackCooldown > 0) attackCooldown--;
+
+  if (distance(player, monster) < 31 &&
+      attackCooldown === 0) {
+    health = Math.max(0, health - 25);
+    attackCooldown = 90;
+    sound(95, 0.45, "sawtooth");
+    showMessage("THE MONSTER FOUND YOU!", 90);
+  }
+
+  if (health <= 0) {
+    running = false;
+    lost = true;
+    sound(65, 1, "sawtooth");
+  }
+
+  if (
+    collected === 3 &&
+    Math.abs(player.x - exit.x) < 35 &&
+    Math.abs(player.y - exit.y) < 35
+  ) {
+    running = false;
+    won = true;
+    sound(650, 0.5);
+  }
+
+  updateHUD();
+}
+
+// Breadth-first pathfinding
+function findPath(from, to) {
+  const startX = Math.floor(from.x / TILE);
+  const startY = Math.floor(from.y / TILE);
+  const endX = Math.floor(to.x / TILE);
+  const endY = Math.floor(to.y / TILE);
+
+  const queue = [[startX, startY]];
+  const visited = new Set([startX+","+startY]);
+  const previous = {};
+
+  const directions = [
+    [1,0], [-1,0], [0,1], [0,-1]
+  ];
+
+  while (queue.length) {
+    const [x,y] = queue.shift();
+
+    if (x === endX && y === endY) break;
+
+    for (const [dx,dy] of directions) {
+      const nx = x+dx;
+      const ny = y+dy;
+      const key = nx+","+ny;
+
+      if (
+        nx < 0 || ny < 0 ||
+        ny >= map.length ||
+        nx >= map[0].length ||
+        map[ny][nx] === "#" ||
+        visited.has(key)
+      ) continue;
+
+      visited.add(key);
+      previous[key] = [x,y];
+      queue.push([nx,ny]);
+    }
+  }
+
+  let key = endX+","+endY;
+
+  if (!visited.has(key)) return [];
+
+  const path = [];
+
+  while (key !== startX+","+startY) {
+    const [x,y] = key.split(",").map(Number);
+
+    path.unshift({
+      x: x*TILE+TILE/2,
+      y: y*TILE+TILE/2
+    });
+
+    const prev = previous[key];
+    if (!prev) break;
+
+    key = prev[0]+","+prev[1];
+  }
+
+  return path;
+}
+
+function drawMap() {
+  ctx.fillStyle = "#15151a";
+  ctx.fillRect(0,0,W,H);
+
+  for (let y=0; y<map.length; y++) {
+    for (let x=0; x<map[y].length; x++) {
+      const px = x*TILE;
+      const py = y*TILE;
+
+      if (map[y][x] === "#") {
+        ctx.fillStyle = "#34343a";
+        ctx.fillRect(px,py,TILE,TILE);
+
+        ctx.strokeStyle = "#202025";
+        ctx.strokeRect(px,py,TILE,TILE);
+
+        ctx.fillStyle = "#414149";
+        ctx.fillRect(px,py,TILE,5);
+      } else {
+        ctx.fillStyle =
+          (x+y)%2 === 0 ? "#19191f" : "#1c1c23";
+
+        ctx.fillRect(px,py,TILE,TILE);
+
+        ctx.strokeStyle = "#24242a";
+        ctx.strokeRect(px,py,TILE,TILE);
+      }
+    }
+  }
+
+  // Blood stains
+  ctx.fillStyle = "#4b151c";
+  const stains = [
+    [310,180], [570,420],
+    [740,150], [180,350]
+  ];
+
+  for (const s of stains) {
+    ctx.beginPath();
+    ctx.ellipse(
+      s[0],s[1],18,9,0,0,Math.PI*2
+    );
+    ctx.fill();
+  }
+}
+
+function drawItems() {
+  for (const item of items) {
+    if (item.taken) continue;
+
+    ctx.save();
+    ctx.shadowColor = "#ffdb65";
+    ctx.shadowBlur = 18;
+    ctx.strokeStyle = "#ffdb65";
+    ctx.lineWidth = 4;
+
+    ctx.beginPath();
+    ctx.arc(item.x,item.y,7,0,Math.PI*2);
+    ctx.stroke();
+
+    ctx.beginPath();
+    ctx.moveTo(item.x+7,item.y);
+    ctx.lineTo(item.x+20,item.y);
+    ctx.lineTo(item.x+20,item.y+7);
+    ctx.stroke();
+
+    ctx.restore();
+  }
+}
+
+function drawExit() {
+  ctx.fillStyle =
+    collected === 3 ? "#268e62" : "#6b2630";
+
+  ctx.fillRect(
+    exit.x-15,exit.y-25,30,50
+  );
+
+  ctx.fillStyle = "#ddd";
+  ctx.beginPath();
+  ctx.arc(
+    exit.x+8,exit.y+3,3,0,Math.PI*2
+  );
+  ctx.fill();
+}
+
+function drawPlayer() {
+  ctx.save();
+  ctx.translate(player.x,player.y);
+
+  ctx.shadowColor = "#7bcaff";
+  ctx.shadowBlur = 12;
+  ctx.fillStyle = "#79c7ef";
+
+  ctx.beginPath();
+  ctx.arc(0,0,player.r,0,Math.PI*2);
+  ctx.fill();
+
+  ctx.rotate(player.direction);
+
+  ctx.fillStyle = "#e8f7ff";
+  ctx.fillRect(9,-4,12,8);
+
+  ctx.restore();
+}
+
+function drawMonster() {
+  ctx.save();
+  ctx.translate(monster.x,monster.y);
+
+  ctx.shadowColor = "#e52d42";
+  ctx.shadowBlur = 22;
+
+  ctx.fillStyle = "#551722";
+  ctx.beginPath();
+  ctx.arc(0,0,monster.r,0,Math.PI*2);
+  ctx.fill();
+
+  ctx.fillStyle = "#ff334b";
+  ctx.beginPath();
+  ctx.arc(-6,-4,4,0,Math.PI*2);
+  ctx.arc(6,-4,4,0,Math.PI*2);
+  ctx.fill();
+
+  ctx.restore();
+}
+
+function drawDarkness() {
+  const radius = flashlight ? 195 : 75;
+
+  const gradient = ctx.createRadialGradient(
+    player.x,player.y,20,
+    player.x,player.y,radius
+  );
+
+  gradient.addColorStop(0,"rgba(0,0,0,0)");
+  gradient.addColorStop(0.55,"rgba(0,0,0,0.3)");
+  gradient.addColorStop(1,"rgba(0,0,0,0.97)");
+
+  ctx.fillStyle = gradient;
+  ctx.fillRect(0,0,W,H);
+
+  // Red danger effect
+  const danger = distance(player,monster);
+
+  if (danger < 180) {
+    ctx.fillStyle =
+      "rgba(150,0,20," +
+      ((180-danger)/180*0.16) + ")";
+
+    ctx.fillRect(0,0,W,H);
+  }
+}
+
+function drawMessage() {
+  if (messageTimer <= 0) return;
+
+  ctx.textAlign = "center";
+  ctx.font = "bold 24px Arial";
+  ctx.fillStyle = "#ff6977";
+  ctx.shadowColor = "#a90022";
+  ctx.shadowBlur = 12;
+
+  ctx.fillText(message,W/2,50);
+
+  ctx.shadowBlur = 0;
+}
+
+function overlay(title,subtitle) {
+  ctx.fillStyle = "rgba(0,0,0,0.88)";
+  ctx.fillRect(0,0,W,H);
+
+  ctx.textAlign = "center";
+
+  ctx.fillStyle = "#e13b48";
+  ctx.shadowColor = "#a00020";
+  ctx.shadowBlur = 25;
+  ctx.font = "bold 55px Arial";
+  ctx.fillText(title,W/2,240);
+
+  ctx.shadowBlur = 0;
+  ctx.fillStyle = "#dddddd";
+  ctx.font = "21px Arial";
+  ctx.fillText(subtitle,W/2,290);
+}
+
+function draw() {
+  drawMap();
+  drawItems();
+  drawExit();
+  drawMonster();
+  drawPlayer();
+  drawDarkness();
+  drawMessage();
+
+  if (!running && !won && !lost) {
+    overlay(
+      "HORROR ESCAPE",
+      "Press START to enter the asylum"
+    );
+  }
+
+  if (paused && running) {
+    overlay("PAUSED","Press P to continue");
+  }
+
+  if (lost) {
+    overlay(
+      "YOU DIED",
+      "The asylum has claimed another victim"
+    );
+  }
+
+  if (won) {
+    overlay(
+      "YOU ESCAPED!",
+      "You survived the haunted asylum"
+    );
+  }
+}
+
+function gameLoop() {
+  update();
+  draw();
+  requestAnimationFrame(gameLoop);
+}
+
+window.addEventListener("keydown",e=>{
+  if (
+    ["ArrowUp","ArrowDown",
+     "ArrowLeft","ArrowRight"," "].includes(e.key)
+  ) e.preventDefault();
+
+  keys[e.key] = true;
+  keys[e.key.toLowerCase()] = true;
+
+  if (e.key.toLowerCase()==="p" && !e.repeat) {
+    togglePause();
+  }
+
+  if (e.key.toLowerCase()==="f" && !e.repeat) {
+    flashlight = !flashlight;
+  }
+
+  if (e.key==="Enter" && !running) {
+    startGame();
+  }
+});
+
+window.addEventListener("keyup",e=>{
+  keys[e.key] = false;
+  keys[e.key.toLowerCase()] = false;
+});
+
+window.addEventListener("blur",()=>{
+  keys = {};
+  if (running) paused = true;
+});
+
+function bindTouch(id,key) {
+  const btn = document.getElementById(id);
+
+  btn.addEventListener("pointerdown",e=>{
+    e.preventDefault();
+    btn.setPointerCapture(e.pointerId);
+    keys[key] = true;
+  });
+
+  const release = ()=>keys[key] = false;
+
+  btn.addEventListener("pointerup",release);
+  btn.addEventListener("pointercancel",release);
+  btn.addEventListener("lostpointercapture",release);
+}
+
+bindTouch("up","ArrowUp");
+bindTouch("down","ArrowDown");
+bindTouch("left","ArrowLeft");
+bindTouch("right","ArrowRight");
+bindTouch("sprint","sprint");
+
+document.getElementById("flash")
+  .addEventListener("click",()=>{
+    flashlight = !flashlight;
+  });
+
+createStarsPlaceholder();
+
+function createStarsPlaceholder() {
+  player = {x:125,y:125,r:14,direction:0};
+  monster = {x:725,y:425,r:17};
+  items = [];
+  exit = {x:825,y:75};
+}
+
+gameLoop();
+</script>
+</body>
+</html>
